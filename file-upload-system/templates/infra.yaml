@@ -1,0 +1,159 @@
+# Template: Creates a REST API gateway integrated w/ a lambda function using inline code.
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Placeholder
+
+Parameters:
+  BucketName:
+    Type: String
+    Default: ts-file-upload-bucket
+    Description: Name of bucket where files are uploaded in workflow.
+
+Resources:
+  # Public facing REST API Gateway.
+  ApiGatewayRest:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Description: REST API for file upload workflow.
+      EndpointConfiguration: 
+        Types: 
+          - REGIONAL
+      Name: FileUploadApi
+
+  # Resource for the REST API Gateway.  Defines a path for a URL.  In this case, /random path is created.
+  ResourceApiGatewayFileUpload:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt
+        - ApiGatewayRest
+        - RootResourceId
+      PathPart: file-upload
+      RestApiId: !Ref ApiGatewayRest
+
+  # Method - GET.  Adds the GET method options to the /random resource path.  Integrated with the Random Lambda function.
+  MethodApiGatewayFileUpload:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: POST
+      Integration:  
+        IntegrationHttpMethod: POST
+        Type: AWS_PROXY
+        Credentials: !GetAtt RoleApiGateway.Arn
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFileUpload.Arn}/invocations'
+      ResourceId: !Ref ResourceApiGatewayFileUpload
+      RestApiId: !Ref ApiGatewayRest
+
+  # Deploys the REST API to a stage so that clients can call the API over the internet.  The stage acts as an environment.
+  ApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: MethodApiGatewayFileUpload
+    Properties:
+      Description: Lambda API Deployment
+      RestApiId: !Ref ApiGatewayRest
+
+  # Creates the Stage that the API gateway gets deployed to.
+  ApiGatewayStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      DeploymentId: !Ref ApiGatewayDeployment
+      Description: Lambda API Stage v0
+      RestApiId: !Ref ApiGatewayRest
+      StageName: 'dev'
+
+  # Role that gives API gateway access to all operations for the Random Lambda.
+  RoleApiGateway:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: [apigateway.amazonaws.com]
+            Action:
+              - 'sts:AssumeRole'
+      Path: '/'
+      Policies:
+        - PolicyName: LambdaAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action: 'lambda:*'
+                Resource: !GetAtt LambdaFileUpload.Arn
+      RoleName: ApiGatewayLambdaExecutionRole
+
+  # Lambda function (Random) that returns a random number 1-10.
+  LambdaFileUpload:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Lambda function integrated w/ API gateway that uploads files to S3.
+      FunctionName: FileUPloadLambda
+      Handler: index.handler
+      Role: !GetAtt LambdaRole.Arn
+      Runtime: nodejs12.x
+      Timeout: 60
+      Code:
+        ZipFile:  |
+          console.log('Loading function');
+          exports.handler = async (event) => {
+              let min = 0;
+              let max = 10;
+              let responseCode = 200;
+              
+              let generatedNumber = Math.floor(Math.random() * max) + min;
+              
+              let responseBody = {
+                  message: generatedNumber,
+                  input: event
+              }
+              
+              let response = {
+                  statusCode: responseCode,
+                  headers: {
+                      "x-custom-header" : "my custom header value"
+                  },
+                  body: responseBody.message
+              }
+              
+              console.log("Entire event: " + JSON.stringify(event));
+              console.log("Event body: " + JSON.stringify(event.body));
+              console.log("Random number generated: ", responseBody.message);
+              return response;
+              
+          };
+
+  # Role for Lambda to allow it to publish logs.
+  LambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [lambda.amazonaws.com]
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: LambdaPermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudwatch:*
+                  - logs:*
+                  - s3:*
+                Resource: '*' 
+      RoleName: LambdaFileUploadRole 
+
+  # S3 bucket used to store configuration files used in Codepipeline deployment
+  S3BucketFileUpload:
+    Type: AWS::S3::Bucket
+    Properties: 
+      BucketName: !Ref BucketName
+      VersioningConfiguration: 
+        Status: Enabled
